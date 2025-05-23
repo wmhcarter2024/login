@@ -15,21 +15,36 @@ export class AzureCliLogin {
         this.loginOptions = defaultExecOptions();
     }
 
-    async login() {
-        core.info(`Running Azure CLI Login.`);
+    // Normally you would try use "az version" to get this, but the first-time startup time makes it prohibitive
+    // Be more creative...
+    async getAzCliVersion() {
         this.azPath = await io.which("az", true);
         core.debug(`Azure CLI path: ${this.azPath}`);
 
-        let output: string = "";
+        let versionOutput: string = "";
         const execOptions: any = {
             listeners: {
                 stdout: (data: Buffer) => {
-                    output += data.toString();
+                    versionOutput += data.toString();
                 }
             }
         };
 
-        await this.executeAzCliCommand(["version"], true, execOptions);
+        // Due to different installation methods/OSes, take the most compatible approach
+        // Read the 'az' executable content into a string
+        azExecutable = fs.readFileSync(this.azPath, 'utf8');
+        // Modify the script to find the azure-cli package version installed
+        azExecutable = azExecutable.replace(/bin\/python -Im azure.cli.*/g, "bin/pip freeze | grep ^azure-cli== | awk -F== '{print $2}'");
+        // Write the modified script to a temporary file
+        const tempFilePath = path.join(os.tmpdir(), 'az-cli-version.sh');
+        fs.writeFileSync(tempFilePath, azExecutable);
+        // Make the temporary file executable
+        fs.chmodSync(tempFilePath, '755');
+        // Execute the modified script, capture stdout
+        await exec.exec(tempFilePath, [], execOptions);
+        // Remove the temporary file
+        fs.unlinkSync(tempFilePath);
+
         core.debug(`Azure CLI version used:\n${output}`);
         try {
             this.azVersion = JSON.parse(output)["azure-cli"];
@@ -37,6 +52,12 @@ export class AzureCliLogin {
         catch (error) {
             core.warning("Failed to parse Azure CLI version.");
         }
+    }
+
+    async login() {
+        core.info(`Running Azure CLI Login.`);
+
+        await this.getAzCliVersion();
         await this.registerAzurestackEnvIfNecessary();
 
         await this.executeAzCliCommand(["cloud", "set", "-n", this.loginConfig.environment], false);
